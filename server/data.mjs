@@ -13,6 +13,8 @@ const dimensionSql = {
   day: "strftime(order_date, '%Y-%m-%d')",
   week: "strftime(date_trunc('week', order_date), '%Y-%m-%d')",
   month: "strftime(order_date, '%Y-%m')",
+  day_of_week: "strftime(order_date, '%A')",
+  day_type: "CASE WHEN isodow(order_date) IN (6, 7) THEN 'Weekend' ELSE 'Weekday' END",
   country: 'country', category: 'category', brand: "coalesce(nullif(brand, ''), 'Unknown')",
   product_name: 'product_name', order_status: 'order_status',
 };
@@ -53,6 +55,25 @@ export async function createDataStore(csvPath) {
     async chart(input, filters) {
       const spec = chartSchema.parse(input);
       const w = where(filters);
+      if (spec.metric === 'average_daily_revenue') {
+        const f = filterSchema.parse(filters || {});
+        const label = spec.dimension === 'day_of_week' ? "strftime(d, '%A')" : "CASE WHEN isodow(d) IN (6, 7) THEN 'Weekend' ELSE 'Weekday' END";
+        // The denominator is calendar days, not transactions or days with sales.
+        // Clamp to the snapshot's coverage so unknown dates aren't treated as zero.
+        const rows = await query(`WITH bounds AS (
+          SELECT greatest(min(order_date), coalesce(?::DATE, min(order_date))) AS start_date,
+                 least(max(order_date), coalesce(?::DATE, max(order_date))) AS end_date FROM sales
+        ), calendar AS (
+          SELECT d::DATE AS d FROM bounds, generate_series(start_date, end_date, INTERVAL 1 DAY) AS dates(d)
+        ), daily AS (
+          SELECT order_date, sum(sale_price)::DOUBLE AS revenue FROM sales ${w.sql} GROUP BY order_date
+        ) SELECT ${label} AS label, avg(coalesce(daily.revenue, 0)) AS value,
+                 count(*)::INTEGER AS days, sum(coalesce(daily.revenue, 0)) AS total
+          FROM calendar LEFT JOIN daily ON calendar.d = daily.order_date
+          GROUP BY 1 ORDER BY value ASC, label ASC LIMIT ${spec.limit + 1}`,
+          [f.start || null, f.end || null, ...w.params]);
+        return { rows: rows.slice(0, spec.limit), truncated: rows.length > spec.limit };
+      }
       const chronological = ['day', 'week', 'month'].includes(spec.dimension);
       const order = chronological ? 'label ASC' : 'value DESC, label ASC';
       const rows = await query(`SELECT ${dimensionSql[spec.dimension]} AS label, (${metricSql[spec.metric]})::DOUBLE AS value FROM sales ${w.sql} GROUP BY 1 ORDER BY ${order} LIMIT ${spec.limit}`, w.params);

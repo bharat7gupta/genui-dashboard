@@ -15,8 +15,8 @@ type Message = { role: 'user' | 'assistant'; text: string };
 const FiltersContext = createContext<Filters>({ status: 'Complete', country: 'all' });
 const dollars = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const integer = new Intl.NumberFormat('en-US');
-const metricNames: Record<string, string> = { revenue: 'Revenue', orders: 'Orders', items: 'Items sold', customers: 'Customers', average_order_value: 'Average order value' };
-const formatValue = (value: number, metric: string) => ['revenue', 'average_order_value'].includes(metric) ? dollars.format(value) : integer.format(value);
+const metricNames: Record<string, string> = { revenue: 'Revenue', orders: 'Orders', items: 'Items sold', customers: 'Customers', average_order_value: 'Average order value', average_daily_revenue: 'Average daily revenue' };
+const formatValue = (value: number, metric: string) => ['revenue', 'average_order_value', 'average_daily_revenue'].includes(metric) ? dollars.format(value) : integer.format(value);
 
 async function api<T>(url: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, { method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal });
@@ -50,7 +50,7 @@ function ChartPanel({ spec }: { spec: Spec }) {
     const a = document.createElement('a'); a.href = url; a.download = `${spec.dimension}-${spec.metric}.csv`; a.click(); URL.revokeObjectURL(url);
   }
   return <Card className={`chart-card ${['day', 'week', 'month'].includes(spec.dimension) ? 'wide' : ''}`}>
-    <div className="chart-heading"><div><h3>{spec.title}</h3><p>{metric} · {spec.dimension.replaceAll('_', ' ')}{!['day', 'week', 'month'].includes(spec.dimension) ? ` · top ${spec.limit}` : ''}</p></div><div className="chart-tools">
+    <div className="chart-heading"><div><h3>{spec.title}</h3><p>{metric} · {spec.dimension.replaceAll('_', ' ')}{!['day', 'week', 'month', 'day_of_week', 'day_type'].includes(spec.dimension) ? ` · top ${spec.limit}` : ''}</p></div><div className="chart-tools">
       <select aria-label={`Chart type for ${spec.title}`} value={kind} onChange={e => setKind(e.target.value as Spec['kind'])}><option value="area">Area</option><option value="line">Line</option><option value="bar">Bar</option><option value="donut">Donut</option><option value="table">Table</option></select>
       <button className="icon-button" aria-label={`Download ${spec.title} as CSV`} onClick={exportCsv} disabled={!rows?.length}><ArrowDownToLine size={16}/></button>
     </div></div>
@@ -61,6 +61,7 @@ function ChartPanel({ spec }: { spec: Spec }) {
       {kind === 'donut' && <div className="donut-layout"><DonutChart data={chartData} index="name" category={metric} colors={['emerald', 'teal', 'cyan', 'blue', 'amber', 'slate']} valueFormatter={common.valueFormatter} className="h-48 w-48"/><ul>{rows.map((r, i) => <li key={r.label}><span className={`legend-dot dot-${i % 6}`}/><span>{r.label}</span><strong>{formatValue(r.value, spec.metric)}</strong></li>)}</ul></div>}
       {kind === 'table' && <div className="table-scroll"><Table><TableHead><TableRow><TableHeaderCell>{spec.dimension.replaceAll('_', ' ')}</TableHeaderCell><TableHeaderCell>{metric}</TableHeaderCell></TableRow></TableHead><TableBody>{rows.map(r => <TableRow key={r.label}><TableCell>{r.label}</TableCell><TableCell>{formatValue(r.value, spec.metric)}</TableCell></TableRow>)}</TableBody></Table></div>}
     </>}
+    {spec.metric === 'average_daily_revenue' && <p className="mt-3 text-xs text-gray-500">Per calendar day · includes zero-sales days · lowest first</p>}
     <div className="chart-foot"><span className="small-dot"/> sales_snapshot.csv <span>{kind === 'donut' ? 'Shares of displayed groups' : 'Calculated with DuckDB'}</span></div>
   </Card>;
 }
@@ -119,7 +120,11 @@ function App() {
     setMessages(m => [...m, { role: 'user', text }]);
     const abort = new AbortController(); controller.current = abort;
     try {
-      const result = await api<{ program: string; title: string; charts: Spec[] }>('/api/generate', { prompt: text, current: program, filters }, abort.signal);
+      const result = await api<{ program: string; title: string; charts: Spec[] } | { unsupported: string }>('/api/generate', { prompt: text, current: program, filters }, abort.signal);
+      if ('unsupported' in result) {
+        setMessages(m => [...m, { role: 'assistant', text: result.unsupported }]);
+        return;
+      }
       setProgram(result.program); setTitle(result.title);
       setMessages(m => [...m, { role: 'assistant', text: `Updated your dashboard with ${result.charts.length} charts: ${result.charts.map(c => c.title).join(', ')}.` }]);
     } catch (e) {

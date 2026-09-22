@@ -15,7 +15,7 @@ try {
   }
 } catch (error) { if (error.code !== 'ENOENT') throw error; }
 process.env.OPENUI_TELEMETRY_DISABLED = '1';
-const model = process.env.OLLAMA_MODEL || 'llama3.2:latest';
+const model = process.env.OLLAMA_MODEL || 'qwen3.5:4b';
 const base = (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const port = Number(process.env.PORT || 3000);
 const data = await createDataStore(path.resolve(root, process.env.SALES_CSV || 'sales_snapshot.csv'));
