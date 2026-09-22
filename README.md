@@ -24,12 +24,23 @@ Use the date, status, and country controls to filter the data. Each chart also h
 
 1. Node loads `sales_snapshot.csv` into an in-memory DuckDB `sales` table at startup.
 2. Ollama runs `qwen3.5:4b` locally with thinking disabled and schema-constrained JSON output.
-3. The server validates the chart specifications, converts them to OpenUI Lang, and validates the resulting program against the component library.
-4. OpenUI renders the registered Tremor components. Charts obtain their values from server-owned DuckDB aggregation queries. The model never supplies sales values or executes SQL.
+3. The model produces a structured analytical plan: fields, date transforms, aggregations, filters, sorting, and limits.
+4. The server validates and compiles the plan into parameterized DuckDB SQL, then OpenUI renders the result with Tremor. The model never supplies sales values or SQL.
 
 Questions that require unavailable fields or unsupported calculations can return an explanation instead of a chart. The CSV has no order time or timezone, so hourly or time-of-day sales cannot be calculated. Unsupported responses preserve the current dashboard.
 
 A new analytical question requests a new view. Explicit follow-ups modify the current view. Invalid output is retried once; failure leaves the existing dashboard intact. Schema validation constrains structure, but model interpretation can still be wrong, so inspect chart labels and active filters.
+
+## Pending
+
+- Finish and evaluate the general query planner; model plans can still be semantically wrong.
+- Add answerability and calculation-claim checks before executing a plan.
+- Add ratios, percentages, comparisons, multi-series charts, and clarification for ambiguous questions.
+- Estimate query cost and block or warn on slow, high-cardinality, or oversized requests.
+- Add timeouts, cancellation, caching, pagination, and concurrency limits.
+- Add authentication, field/row authorization, export controls, rate limits, and audit logs.
+- Add schema/data-quality checks, file refresh, freshness tracking, and persistent DuckDB support.
+- Add a natural-language regression suite, browser tests, monitoring, and a production deployment plan.
 
 ## Data definitions
 
