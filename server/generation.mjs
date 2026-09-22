@@ -4,33 +4,59 @@ import { createDashboardLibrary, chartSchema, defaultProgram } from '../shared/l
 
 const library = createDashboardLibrary();
 const parser = createParser(library.toJSONSchema(), 'Dashboard');
-export const dashboardSchema = z.object({
-  title: z.string().min(1).max(100),
-  charts: z.array(chartSchema.strict()).min(1).max(6),
-}).strict();
+export const dashboardSchema = z
+  .object({
+    title: z.string().min(1).max(100),
+    charts: z.array(chartSchema.strict()).min(1).max(6),
+  })
+  .strict();
 const responseSchema = z.union([
   dashboardSchema,
   z.object({ unsupported: z.string().min(1).max(600) }).strict(),
 ]);
 const outputSchema = z.toJSONSchema(responseSchema);
-const missingTimeMessage = 'This CSV contains order dates but no order time or timezone, so I cannot determine which hours have the most sales. Add an order timestamp and its timezone to enable time-of-day analysis. Your dashboard is unchanged.';
+const missingTimeMessage =
+  'This CSV contains order dates but no order time or timezone, so I cannot determine which hours have the most sales. Add an order timestamp and its timezone to enable time-of-day analysis. Your dashboard is unchanged.';
 
 export function compileDashboard(input) {
   const { title, charts } = dashboardSchema.parse(input);
-  const program = `root = Dashboard(${JSON.stringify(title)}, [${charts.map((_, i) => `chart${i}`).join(', ')}])\n` + charts.map((c, i) => `chart${i} = Chart(${[c.title, c.kind, c.dimension, c.metric, c.limit].map(v => JSON.stringify(v)).join(', ')})`).join('\n');
+  const program =
+    `root = Dashboard(${JSON.stringify(title)}, [${charts.map((_, i) => `chart${i}`).join(', ')}])\n` +
+    charts
+      .map(
+        (c, i) =>
+          `chart${i} = Chart(${[c.title, c.kind, c.dimension, c.metric, c.limit].map((v) => JSON.stringify(v)).join(', ')})`,
+      )
+      .join('\n');
   return { program, title, charts };
 }
 
 export function validateProgram(raw) {
-  const program = raw.trim().replace(/^```(?:openui(?:-lang)?|\w*)?\s*\n/, '').replace(/\n```$/, '');
+  const program = raw
+    .trim()
+    .replace(/^```(?:openui(?:-lang)?|\w*)?\s*\n/, '')
+    .replace(/\n```$/, '');
   const result = parser.parse(program);
-  if (!result.root || result.root.typeName !== 'Dashboard' || result.meta.incomplete || result.meta.errors.length || result.meta.unresolved.length || result.queryStatements.length || result.mutationStatements.length || Object.keys(result.stateDeclarations).length) {
-    throw new Error('Return a complete Dashboard with valid Chart components. ' + result.meta.errors.map(e => e.message).join('; '));
+  if (
+    !result.root ||
+    result.root.typeName !== 'Dashboard' ||
+    result.meta.incomplete ||
+    result.meta.errors.length ||
+    result.meta.unresolved.length ||
+    result.queryStatements.length ||
+    result.mutationStatements.length ||
+    Object.keys(result.stateDeclarations).length
+  ) {
+    throw new Error(
+      'Return a complete Dashboard with valid Chart components. ' +
+        result.meta.errors.map((e) => e.message).join('; '),
+    );
   }
   const title = z.string().min(1).max(100).parse(result.root.props.title);
   const nodes = z.array(z.any()).min(1).max(6).parse(result.root.props.charts);
-  const charts = nodes.map(node => {
-    if (node?.typeName !== 'Chart' || node.hasDynamicProps || node.partial) throw new Error('Only static Chart components are supported');
+  const charts = nodes.map((node) => {
+    if (node?.typeName !== 'Chart' || node.hasDynamicProps || node.partial)
+      throw new Error('Only static Chart components are supported');
     return chartSchema.parse(node.props);
   });
   // Re-serialize validated literals, so only our two registered components reach the browser.
@@ -42,9 +68,16 @@ export async function modelStatus(base, model) {
     const response = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(3000) });
     if (!response.ok) throw new Error('Ollama unavailable');
     const body = await response.json();
-    const models = (body.models || []).map(m => m.name);
-    return { model, connected: true, ready: models.includes(model) || models.includes(`${model}:latest`), models };
-  } catch { return { model, connected: false, ready: false, models: [] }; }
+    const models = (body.models || []).map((m) => m.name);
+    return {
+      model,
+      connected: true,
+      ready: models.includes(model) || models.includes(`${model}:latest`),
+      models,
+    };
+  } catch {
+    return { model, connected: false, ready: false, models: [] };
+  }
 }
 
 export async function generateDashboard({ prompt, current, filters, base, model, signal }) {
@@ -66,35 +99,65 @@ Example request: Show me the number of purchasing customers over each month
 Example response: {"title":"Monthly purchasing customers","charts":[{"title":"Purchasing customers by month","kind":"line","dimension":"month","metric":"customers","limit":90}]}
 Output schema: ${JSON.stringify(outputSchema)}`;
   const previous = validateProgram(current || defaultProgram);
-  const messages = [{ role: 'system', content: system }, { role: 'user', content: `Current dashboard: ${JSON.stringify({ title: previous.title, charts: previous.charts })}\nActive filters: ${JSON.stringify(filters)}\nRequest: ${prompt}` }];
+  const messages = [
+    { role: 'system', content: system },
+    {
+      role: 'user',
+      content: `Current dashboard: ${JSON.stringify({ title: previous.title, charts: previous.charts })}\nActive filters: ${JSON.stringify(filters)}\nRequest: ${prompt}`,
+    },
+  ];
   let lastError;
   for (let attempt = 0; attempt < 2; attempt++) {
     const response = await fetch(`${base}/api/chat`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
-      body: JSON.stringify({ model, messages, stream: false, ...(model.startsWith('qwen3') ? { think: false } : {}), format: outputSchema, options: { temperature: 0, num_ctx: 8192, num_predict: 2000 } }),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal,
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: false,
+        ...(model.startsWith('qwen3') ? { think: false } : {}),
+        format: outputSchema,
+        options: { temperature: 0, num_ctx: 8192, num_predict: 2000 },
+      }),
     });
     if (!response.ok) {
-      if (response.status === 404) throw new Error(`Model ${model} is not installed. Run: ollama pull ${model}`);
+      if (response.status === 404)
+        throw new Error(`Model ${model} is not installed. Run: ollama pull ${model}`);
       throw new Error(`Ollama returned HTTP ${response.status}. Check the local model server.`);
     }
     const body = await response.json();
     const content = body.message?.content || '';
     try {
-      if (body.done_reason === 'length') throw new Error('The response exceeded the output token limit. Keep titles concise.');
+      if (body.done_reason === 'length')
+        throw new Error('The response exceeded the output token limit. Keep titles concise.');
       const parsed = responseSchema.parse(JSON.parse(content));
       if ('unsupported' in parsed) return { unsupported: parsed.unsupported, model };
       // Reject hourly claims even if the model selects a schema-valid date dimension.
-      if ([parsed.title, ...parsed.charts.map(c => c.title)].some(title => /\b(hour(?:s|ly)?|time[- ]of[- ](?:the[- ])?day|morning|afternoon|evening)\b/i.test(title))) {
+      if (
+        [parsed.title, ...parsed.charts.map((c) => c.title)].some((title) =>
+          /\b(hour(?:s|ly)?|time[- ]of[- ](?:the[- ])?day|morning|afternoon|evening)\b/i.test(
+            title,
+          ),
+        )
+      ) {
         return { unsupported: missingTimeMessage, model };
       }
       const compiled = compileDashboard(parsed);
       // Verify the generated OpenUI against the same library used by the browser.
       return { ...validateProgram(compiled.program), model };
-    }
-    catch (error) {
+    } catch (error) {
       lastError = error;
-      messages.push({ role: 'assistant', content }, { role: 'user', content: `Correct the JSON to match the schema and my request. Validation error: ${error.message.slice(0,1500)}. Return the entire corrected JSON object, with no markdown.` });
+      messages.push(
+        { role: 'assistant', content },
+        {
+          role: 'user',
+          content: `Correct the JSON to match the schema and my request. Validation error: ${error.message.slice(0, 1500)}. Return the entire corrected JSON object, with no markdown.`,
+        },
+      );
     }
   }
-  throw new Error(`The local model returned an invalid dashboard after two attempts. Your current dashboard is unchanged. Please retry. ${lastError.message.slice(0,200)}`);
+  throw new Error(
+    `The local model returned an invalid dashboard after two attempts. Your current dashboard is unchanged. Please retry. ${lastError.message.slice(0, 200)}`,
+  );
 }

@@ -1,0 +1,6 @@
+dist
+node_modules
+.wrangler
+sales_snapshot.csv
+package-lock.json
+public/*.svg
